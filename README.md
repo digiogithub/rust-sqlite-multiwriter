@@ -1,85 +1,86 @@
 # rust-sqlite-multiwriter
 
-Varios escritores concurrentes sobre **una** base de datos SQLite, en Rust.
+Many concurrent writers on **one** SQLite database, in Rust.
 
-Port a Rust del motor de [sqliteai/sqlite-multiwriter](https://github.com/sqliteai/sqlite-multiwriter)
-(artículo: [We solved SQLite's single-writer limitation](https://marcobambini.substack.com/p/we-solved-sqlites-single-writer-limitation)),
-hermano de [go-sqlite-multiwriter](https://github.com/digiogithub/go-sqlite-multiwriter). Es un **VFS**
-registrado en el SQLite de `libsqlite3-sys` (el mismo que usa `rusqlite` con `bundled`): tu SQL, tu esquema y tu
-fichero `.db` no cambian, y el fichero vuelve a ser una base SQLite normal al cerrar la última conexión.
+A Rust port of the engine of [sqliteai/sqlite-multiwriter](https://github.com/sqliteai/sqlite-multiwriter)
+(article: [We solved SQLite's single-writer limitation](https://marcobambini.substack.com/p/we-solved-sqlites-single-writer-limitation)),
+sister of [go-sqlite-multiwriter](https://github.com/digiogithub/go-sqlite-multiwriter). It is a **VFS**
+registered in the SQLite of `libsqlite3-sys` (the one `rusqlite` uses with `bundled`): your SQL, your schema and
+your `.db` file do not change, and the file is a plain SQLite database again when the last connection closes.
 
 ```rust
 use sqlite_multiwriter::{open, run_tx, Options};
 
-// una conexión por hilo: cada una es un escritor independiente
+// one connection per thread: each one is an independent writer
 let mut conn = open("app.db", &Options { rebase: true, ..Default::default() })?;
 run_tx(&mut conn, |tx| {
     tx.execute("UPDATE account SET balance = balance + 10 WHERE id = ?1", [7])
-})?; // repite la transacción entera si pierde contra otro commit (SQLITE_BUSY_SNAPSHOT)
+})?; // retries the whole transaction when it loses against another commit (SQLITE_BUSY_SNAPSHOT)
 ```
 
-Sin el feature `rusqlite` (activo por defecto) basta con `sqlite_multiwriter::register()` y abrir la URI
-`file:app.db?vfs=multiwriter` con `SQLITE_OPEN_URI`.
+Without the `rusqlite` feature (on by default), call `sqlite_multiwriter::register()` and open the URI
+`file:app.db?vfs=multiwriter` with `SQLITE_OPEN_URI`.
 
-## Cómo funciona
+## How it works
 
 ```
-escritor 1 --> WAL privado --+
-escritor 2 --> WAL privado --+--> validación y publicación --> log de commits --> fichero .db
-escritor 3 --> WAL privado --+    (gana el primero en confirmar)                 (compactación)
+writer 1 --> private WAL --+
+writer 2 --> private WAL --+--> validation and publication --> commit log --> .db file
+writer 3 --> private WAL --+    (first committer wins)                       (compaction)
 ```
 
-* **Carriles privados**: cada conexión tiene su WAL en memoria y su wal-index propio; nadie espera por el lock
-  de escritura. Las escrituras al `.db` se descartan: sólo el compactador lo escribe.
-* **Snapshots y versiones de página**: almacén `(página, época)` con locks por franjas; cada transacción lee su
-  instantánea.
-* **Commit**: se valida el *schema cookie*, las páginas **leídas** (evita *write skew*; se perdona una página
-  interior de tabla cuyo enrutado no cambió) y las **escritas** (gana el primero). Si falla:
+* **Private lanes**: every connection has its own in-memory WAL and wal-index; nobody waits for the write lock.
+  Writes to the `.db` are discarded: only the compactor writes it.
+* **Snapshots and page versions**: a `(page, epoch)` store with striped locks; every transaction reads its
+  snapshot.
+* **Commit**: the schema cookie is validated, as are the pages **read** (prevents write skew; an interior table
+  page whose routing did not change is forgiven) and the pages **written** (first committer wins). On failure:
   `SQLITE_BUSY_SNAPSHOT`.
-* **Reubicación** de páginas nuevas cuando varios commits hacen crecer el fichero a la vez, y **fusión** a tres
-  bandas de páginas interiores.
-* **Rebase** (`Options::rebase`): un commit que sólo perdió por compartir página con otras filas se re-ejecuta
-  fila a fila (decodificando las páginas) sobre el estado más reciente, en lotes, en una conexión auxiliar.
-* **Durabilidad**: log segmentado `<db>-mw*` con *group commit* (`synchronous=FULL`), recuperación tras crash
-  y compactación en segundo plano.
-* **Barrera DDL** vía `sqlite3_trace_v2` (instalado con `sqlite3_auto_extension`).
+* **Relocation** of new pages when several commits grow the file at once, and three-way **merge** of interior
+  pages.
+* **Rebase** (`Options::rebase`): a commit that lost only because it shared a page with other rows is replayed
+  row by row (decoded from the pages) at the latest state, in batches, on a helper connection.
+* **Durability**: segmented `<db>-mw*` log with group commit (`synchronous=FULL`), crash recovery and background
+  compaction.
+* **DDL barrier** via `sqlite3_trace_v2` (installed with `sqlite3_auto_extension`).
 
-## Estado
+## Status
 
 | | |
 |---|---|
-| Carriles privados, snapshots, validación, reubicación, merge, log, recuperación, compactación, GC, barrera DDL | ✅ |
+| Private lanes, snapshots, validation, relocation, merge, log, recovery, compaction, GC, DDL barrier | ✅ |
 | Rebase (`mw_rebase=1`) | ✅ |
-| Multiproceso (`mw_mp=1`) | ⏳ (hoy un proceso por base; un segundo proceso recibe `SQLITE_BUSY`) |
+| Multi-process (`mw_mp=1`) | ⏳ (available in the Go version; here, one process per database for now: a second process gets `SQLITE_BUSY`) |
 
-## Rendimiento
+## Performance
 
-`cargo run --release --example mwbench -- bulk|groups|hot 1,4,16 4` — 4 núcleos, disco local,
-`synchronous=FULL`. `sqlite` = SQLite de serie en WAL con `BEGIN IMMEDIATE`; `mw` = motor; `mwr` = motor con rebase.
+`cargo run --release --example mwbench -- bulk|groups|hot 1,4,16 4` — 4 cores, local disk,
+`synchronous=FULL`. `sqlite` = stock SQLite in WAL mode with `BEGIN IMMEDIATE`; `mw` = the engine; `mwr` = the
+engine with rebase.
 
-| carga | escritores | SQLite tx/s | mw tx/s | mwr tx/s | SQLite p99.9 | mw/mwr p99.9 |
+| workload | writers | SQLite tx/s | mw tx/s | mwr tx/s | SQLite p99.9 | mw/mwr p99.9 |
 |---|---:|---:|---:|---:|---:|---:|
-| bulk (100 inserts/tx, tabla propia) | 16 | 3.451 | **4.970** | 4.985 | 1.466 ms | 47 ms |
-| groups (cada uno su fila, misma página) | 16 | 5.935 | 3.194 (215 reint./100) | **11.849** (0 reint.) | 54 ms | **6,8 ms** |
-| hot (4 filas compartidas: conflicto real) | 16 | **6.066** | 3.388 | 3.412 | 330 ms | 54 ms |
+| bulk (100 inserts/tx, own table) | 16 | 3,451 | **4,970** | 4,985 | 1,466 ms | 47 ms |
+| groups (each its own row, same page) | 16 | 5,935 | 3,194 (215 retries/100) | **11,849** (0 retries) | 54 ms | **6.8 ms** |
+| hot (4 shared rows: real conflict) | 16 | **6,066** | 3,388 | 3,412 | 330 ms | 54 ms |
 
-## Opciones (URI)
+## Options (URI)
 
-`vfs=multiwriter` (o `mw=1`) activa el motor; `mw_rebase=1`, `mw_rebase_backoff=0`, `mw_readcheck=0`,
-`mw_log_max_mb`, `mw_base_cache_mb`, `mw_gc`, `mw_noreloc`, `mw_nomerge`, `mw_noroute`. `MW_DEBUG=1` explica
-cada rechazo del rebase.
+`vfs=multiwriter` (or `mw=1`) enables the engine; `mw_rebase=1`, `mw_rebase_backoff=0`, `mw_readcheck=0`,
+`mw_log_max_mb`, `mw_base_cache_mb`, `mw_gc`, `mw_noreloc`, `mw_nomerge`, `mw_noroute`. `MW_DEBUG=1` explains
+every refusal of the rebase.
 
-## Límites
+## Limits
 
-Sólo WAL (no `locking_mode=EXCLUSIVE` ni `auto_vacuum`), sistema de ficheros local, la base sólo se usa a
-través del motor mientras está abierta, y una transacción rechazada se repite entera. El rebase sólo re-ejecuta
-transacciones "a ciegas" (`INSERT ... VALUES`, `UPDATE`/`DELETE` por clave, sin `SELECT` previo) y no aplica con
-triggers, tablas virtuales o `AUTOINCREMENT`.
+WAL only (no `locking_mode=EXCLUSIVE` nor `auto_vacuum`), local file system, the database is only used through
+the engine while it is open, and a refused transaction is retried whole. The rebase only replays "blind"
+transactions (`INSERT ... VALUES`, `UPDATE`/`DELETE` by key, with no prior `SELECT`) and does not apply with
+triggers, virtual tables or `AUTOINCREMENT`.
 
 ## Tests
 
 ```
-cargo test --release      # concurrencia, invariantes, write skew, DDL, crash/recuperación, rebase
+cargo test --release      # concurrency, invariants, write skew, DDL, crash/recovery, rebase
 ```
 
-Licencia Apache 2.0 (ver `LICENSE` y `NOTICE`).
+Apache 2.0 license (see `LICENSE` and `NOTICE`).

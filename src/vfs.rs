@@ -182,6 +182,9 @@ unsafe extern "C" fn vfs_open(_v: *mut ffi::sqlite3_vfs, z: *const c_char, p: *m
         let d = db::acquire(&path);
         let mut l = Box::new(Lane::new(d.clone()));
         l.readcheck = uri_bool(z, "mw_readcheck", true);
+        if uri_bool(z, "mw_durable_visible", false) {
+            d.durable_vis.store(true, Relaxed); // (for the whole database: the rebase helper publishes for every connection)
+        }
         l.noreloc = uri_bool(z, "mw_noreloc", false);
         l.nomerge = uri_bool(z, "mw_nomerge", false);
         l.core.noroute = uri_bool(z, "mw_noroute", false);

@@ -110,6 +110,8 @@ struct SyncState {
     started: u64,
     done: u64,
     running: bool,
+    /// An fsync failed: the data it should have covered may never reach the disk.
+    broken: bool,
 }
 
 pub struct Place {
@@ -434,6 +436,11 @@ impl Log {
         let mut s = lock(&self.sync);
         let need = s.started + 1;
         while s.done < need {
+            if s.broken {
+                // a later fsync that succeeds (the kernel forgets the error) must not acknowledge a commit that sits
+                // behind a record that may be lost
+                return Err(RC_IOERR_FSYNC);
+            }
             if s.running {
                 s = self.sync_cv.wait(s).unwrap_or_else(|e| e.into_inner());
                 continue;
@@ -453,6 +460,7 @@ impl Log {
             s.running = false;
             self.sync_cv.notify_all();
             if err {
+                s.broken = true;
                 return Err(RC_IOERR_FSYNC);
             }
             s.done = mine;

@@ -56,6 +56,8 @@ pub struct LaneCore {
     pub id: usize,
     pub noroute: bool,
     pub holds_reloc: bool,
+    /// Holds the hot-spot turn (released by the publication as soon as the commit is visible, or at the end).
+    pub holds_hot: bool,
 }
 
 pub struct Lane {
@@ -95,7 +97,6 @@ pub struct Lane {
 
     consec_aborts: i32,
     retry_credit: i32,
-    holds_hot: bool,
     pub ddl_active: bool,
 
     pub rb: crate::rebase::LaneRebase,
@@ -104,7 +105,7 @@ pub struct Lane {
 impl Lane {
     pub fn new(db: Arc<MwDb>) -> Lane {
         Lane {
-            core: LaneCore { id: NEXT_LANE.fetch_add(1, Relaxed), noroute: false, holds_reloc: false },
+            core: LaneCore { id: NEXT_LANE.fetch_add(1, Relaxed), noroute: false, holds_reloc: false, holds_hot: false },
             db,
             readcheck: true,
             noreloc: false,
@@ -134,7 +135,6 @@ impl Lane {
             dsz: None,
             consec_aborts: 0,
             retry_credit: 0,
-            holds_hot: false,
             ddl_active: false,
             rb: Default::default(),
         }
@@ -162,10 +162,10 @@ impl Lane {
         }
         let db = self.db.clone();
         // hot spots: a connection that keeps losing takes a per-database turn before its snapshot (20 ms at most)
-        if self.retry_credit > 0 && !self.holds_hot {
+        if self.retry_credit > 0 && !self.core.holds_hot {
             for _ in 0..400 {
                 if db.hot_held.compare_exchange(0, 1, AcqRel, Acquire).is_ok() {
-                    self.holds_hot = true;
+                    self.core.holds_hot = true;
                     db.n.hot_serialised.fetch_add(1, Relaxed);
                     break;
                 }
@@ -210,8 +210,8 @@ impl Lane {
             let mut a = lock(&self.db.active);
             a.remove(&self.id());
             self.snap_held = false;
-            if self.holds_hot {
-                self.holds_hot = false;
+            if self.core.holds_hot {
+                self.core.holds_hot = false;
                 self.db.hot_held.store(0, Release);
             }
             if !self.tx.is_writer && self.retry_credit > 0 {

@@ -55,6 +55,11 @@ pub struct Options {
     pub rebase: bool,
     /// Do not validate the pages a transaction read: fewer retries, but write skew becomes possible.
     pub disable_read_check: bool,
+    /// Make a commit visible to other transactions only once it is on the disk, like stock SQLite
+    /// (mw_durable_visible=1). By default a commit is visible as soon as it is published and its own COMMIT returns
+    /// once it is durable: concurrent writers start from fresher snapshots and lose far fewer commits, but after a
+    /// power failure a read-only transaction may have seen a commit whose COMMIT never returned.
+    pub durable_visibility: bool,
     /// The size of the log before it is compacted into the database file (32 MB by default).
     pub log_max_mb: Option<u32>,
     /// Extra URI parameters.
@@ -80,6 +85,9 @@ pub fn uri(path: &str, o: &Options) -> String {
     }
     if o.disable_read_check {
         u.push_str("&mw_readcheck=0");
+    }
+    if o.durable_visibility {
+        u.push_str("&mw_durable_visible=1");
     }
     if let Some(mb) = o.log_max_mb {
         u.push_str(&format!("&mw_log_max_mb={mb}"));

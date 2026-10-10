@@ -4,7 +4,8 @@
 //!
 //! Workloads: bulk (100 inserts per transaction into the writer's own table), groups (each writer updates its own
 //! row; the rows share a page), hot (every writer increments one of 4 rows: true conflicts).
-//! Variants: sqlite, mw (the engine), mwr (the engine with the rebase).
+//! Variants: sqlite, mw (the engine), mwr (the engine with the rebase). MW_DURABLE_VISIBLE=1 makes the engine's commits
+//! visible only once durable.
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use sqlite_multiwriter::{is_busy_snapshot, open, Options};
@@ -21,7 +22,15 @@ fn conn(variant: &str, path: &str) -> Connection {
             c
         }
         v => {
-            let c = open(path, &Options { rebase: v == "mwr", ..Default::default() }).unwrap();
+            let durable = std::env::var("MW_DURABLE_VISIBLE").is_ok_and(|v| v == "1");
+            // MW_PARAMS="k=v&k2=v2": extra URI parameters of the engine
+            let params = std::env::var("MW_PARAMS")
+                .unwrap_or_default()
+                .split('&')
+                .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+                .collect();
+            let o = Options { rebase: v == "mwr", durable_visibility: durable, params, ..Default::default() };
+            let c = open(path, &o).unwrap();
             c.execute_batch("PRAGMA synchronous=FULL;").unwrap();
             c
         }

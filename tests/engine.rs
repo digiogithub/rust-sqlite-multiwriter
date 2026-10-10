@@ -81,16 +81,26 @@ fn bulk_own_tables_relocate() {
 /// Lost updates: every committed increment is in the final value.
 #[test]
 fn hot_counters() {
-    let d = tmpdir("hot");
+    hot_counters_with(false);
+}
+
+#[test]
+fn hot_counters_durable_visibility() {
+    hot_counters_with(true);
+}
+
+fn hot_counters_with(durable: bool) {
+    let d = tmpdir(if durable { "hotd" } else { "hot" });
     let path = path_in(&d, "hot.db");
-    let c = conn(&path, &Options::default());
+    let o = Options { durable_visibility: durable, ..Default::default() };
+    let c = conn(&path, &o);
     c.execute_batch("CREATE TABLE c(id INTEGER PRIMARY KEY, n INT); INSERT INTO c VALUES(0,0),(1,0),(2,0),(3,0);").unwrap();
     let done = Arc::new(AtomicI64::new(0));
     let hs: Vec<_> = (0..8)
         .map(|w| {
-            let (path, done) = (path.clone(), done.clone());
+            let (path, done, o) = (path.clone(), done.clone(), o.clone());
             std::thread::spawn(move || {
-                let mut c = conn(&path, &Options::default());
+                let mut c = conn(&path, &o);
                 let mut r = rand::rngs::StdRng::seed_from_u64(w);
                 for _ in 0..150 {
                     let id: i64 = r.gen_range(0..4);

@@ -79,6 +79,8 @@ pub struct MwDb {
     compact_mu: Mutex<()>,
     compactor: Mutex<Option<(Arc<(Mutex<bool>, Condvar)>, JoinHandle<()>)>>,
     pub log_max_bytes: AtomicI64,
+    /// A commit becomes visible only once it is on the disk (mw_durable_visible=1).
+    pub durable_vis: AtomicBool,
     pub gc_interval: AtomicI64,
     pub_since_gc: AtomicI64,
     pub n: Counters,
@@ -122,6 +124,7 @@ pub fn acquire(path: &str) -> Arc<MwDb> {
         compact_mu: Mutex::new(()),
         compactor: Mutex::new(None),
         log_max_bytes: AtomicI64::new(32 << 20),
+        durable_vis: AtomicBool::new(false),
         gc_interval: AtomicI64::new(64),
         pub_since_gc: AtomicI64::new(0),
         n: Counters::default(),
@@ -291,8 +294,11 @@ impl MwDb {
             return Err(RC_IOERR);
         }
         let (lane_id, noroute) = lane.as_ref().map_or((0, false), |l| (l.id, l.noroute));
-        // a relocation holds the relocation lock: it is released as soon as its pages are installed
-        let mut holds_reloc = lane.is_some_and(|l| std::mem::take(&mut l.holds_reloc));
+        // a relocation holds the relocation lock: it is released as soon as its pages are installed; the hot-spot
+        // turn, as soon as the commit is visible (the next holder's snapshot sees it: no need to wait for the fsync)
+        let (mut holds_reloc, holds_hot) =
+            lane.map_or((false, false), |l| (std::mem::take(&mut l.holds_reloc), std::mem::take(&mut l.holds_hot)));
+        let mut hot = HotTurn { db: self, held: holds_hot };
         let reloc_release = |h: &mut bool| {
             if std::mem::take(h) {
                 self.reloc_unlock();
@@ -401,18 +407,29 @@ impl MwDb {
         self.gate_exit();
         reloc_release(&mut holds_reloc); // (a relocation: the next one may go, our pages are installed)
 
-        // ---- outside the locks: persist, then become visible (in epoch order)
+        // ---- outside the locks: write the record, become visible (in epoch order), then durable
         if let Err(rc) = e.log.write(&place, epoch, new_size, pgnos, imgs) {
             self.take_back(epoch, &place, pgnos, wrote_p1, prev_p1);
             return Err(rc);
         }
-        if sync
-            && let Err(rc) = e.log.sync() {
-                self.failed.store(true, Release); // outcome uncertain: stop accepting commits
-                self.wake_all();
-                return Err(rc);
-            }
+        // Visible, then durable: the next snapshots see the commit while its fsync runs (a snapshot taken before it
+        // is visible is bound to lose against it on a shared page). A commit that read this one is acknowledged only
+        // after an fsync round that started after this record was written, so it never outlives this one in the
+        // log; the compactor syncs the log before it copies pages. mw_durable_visible=1 keeps the order of stock
+        // SQLite.
+        let durable_first = sync && self.durable_vis.load(Relaxed);
+        if durable_first && let Err(rc) = e.log.sync() {
+            self.failed.store(true, Release); // outcome uncertain: stop accepting commits
+            self.wake_all();
+            return Err(rc);
+        }
         self.make_visible(epoch)?;
+        hot.release();
+        if sync && !durable_first && let Err(rc) = e.log.sync() {
+            self.failed.store(true, Release); // visible already, outcome uncertain: stop accepting commits
+            self.wake_all();
+            return Err(rc);
+        }
 
         // the log only shrinks through compaction: ask the compactor, and throttle if it cannot keep up
         let lim = self.log_max_bytes.load(Relaxed);
@@ -681,5 +698,25 @@ impl Validation {
             Ok(i) => self.own_epochs[i],
             Err(_) => self.snapshot_epoch,
         }
+    }
+}
+
+/// The hot-spot turn of a lane during its publication: released when the commit is visible, or on any way out.
+struct HotTurn<'a> {
+    db: &'a MwDb,
+    held: bool,
+}
+
+impl HotTurn<'_> {
+    fn release(&mut self) {
+        if std::mem::take(&mut self.held) {
+            self.db.hot_held.store(0, Release);
+        }
+    }
+}
+
+impl Drop for HotTurn<'_> {
+    fn drop(&mut self) {
+        self.release();
     }
 }

@@ -19,6 +19,8 @@
 //! (`run_tx` does it).
 
 mod btree;
+mod capi;
+mod catalog;
 mod db;
 mod fsio;
 mod hook;
@@ -26,6 +28,7 @@ mod lane;
 mod log;
 mod rebase;
 mod reloc;
+mod rowdiff;
 mod store;
 mod util;
 mod vfs;

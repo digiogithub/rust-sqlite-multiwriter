@@ -112,12 +112,11 @@ impl Store {
     /// Copies bytes [poff, poff+dst.len()) of the newest version of pgno with epoch <= snap. False if none.
     pub fn read(&self, pgno: u32, snap: u64, poff: usize, dst: &mut [u8]) -> bool {
         let s = lock(&self.stripes[Self::stripe_of(pgno)]);
-        if let Some(c) = s.get(&pgno) {
-            if let Some(i) = c.find(snap) {
+        if let Some(c) = s.get(&pgno)
+            && let Some(i) = c.find(snap) {
                 dst.copy_from_slice(&c.v[i].data[poff..poff + dst.len()]);
                 return true;
             }
-        }
         false
     }
 

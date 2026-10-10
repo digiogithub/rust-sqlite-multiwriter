@@ -292,8 +292,8 @@ impl MwDb {
         }
         let (lane_id, noroute) = lane.as_ref().map_or((0, false), |l| (l.id, l.noroute));
         // a relocation holds the relocation lock: it is released as soon as its pages are installed
-        let mut holds_reloc = lane.map_or(false, |l| std::mem::take(&mut l.holds_reloc));
-        let mut reloc_release = |h: &mut bool| {
+        let mut holds_reloc = lane.is_some_and(|l| std::mem::take(&mut l.holds_reloc));
+        let reloc_release = |h: &mut bool| {
             if std::mem::take(h) {
                 self.reloc_unlock();
             }
@@ -317,8 +317,8 @@ impl MwDb {
                     None => (None, None),
                     Some(c) => (c.find(snap).map(|i| c.v[i].data.to_vec()), c.v.last().map(|x| x.data.to_vec())),
                 };
-                if !noroute && lane_id != 0 {
-                    if let Some(newest) = newest {
+                if !noroute && lane_id != 0
+                    && let Some(newest) = newest {
                         // an interior page changed: is the route this transaction took through it unchanged?
                         let used = used.get_or_insert_with(|| {
                             let mut u: Vec<u32> = reads.iter().chain(pgnos.iter()).copied().collect();
@@ -329,14 +329,12 @@ impl MwDb {
                             let mut b = vec![0u8; st.pgsz];
                             if self.read_real(rp, &mut b) { Some(b) } else { None }
                         });
-                        if let Some(old) = old {
-                            if interior_routes_same(&old, &newest, st.pgsz, st.reserved, used) {
+                        if let Some(old) = old
+                            && interior_routes_same(&old, &newest, st.pgsz, st.reserved, used) {
                                 self.n.reads_saved.fetch_add(1, Relaxed);
                                 continue;
                             }
-                        }
                     }
-                }
                 self.n.read_conflicts.fetch_add(1, Relaxed);
                 rc = ERR_CONFLICT_READ;
                 break;
@@ -408,13 +406,12 @@ impl MwDb {
             self.take_back(epoch, &place, pgnos, wrote_p1, prev_p1);
             return Err(rc);
         }
-        if sync {
-            if let Err(rc) = e.log.sync() {
+        if sync
+            && let Err(rc) = e.log.sync() {
                 self.failed.store(true, Release); // outcome uncertain: stop accepting commits
                 self.wake_all();
                 return Err(rc);
             }
-        }
         self.make_visible(epoch)?;
 
         // the log only shrinks through compaction: ask the compactor, and throttle if it cannot keep up
@@ -643,11 +640,10 @@ impl MwDb {
                     }
                 }
                 let Some(db) = weak.upgrade() else { return };
-                if let Some(e) = db.engine_opt() {
-                    if e.log.bytes() > db.log_max_bytes.load(Relaxed) {
+                if let Some(e) = db.engine_opt()
+                    && e.log.bytes() > db.log_max_bytes.load(Relaxed) {
                         let _ = db.compact();
                     }
-                }
             })
             .expect("compactor thread");
         *c = Some((sig, h));

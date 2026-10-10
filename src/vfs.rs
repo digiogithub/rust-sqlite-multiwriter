@@ -131,8 +131,8 @@ unsafe extern "C" fn vfs_open(_v: *mut ffi::sqlite3_vfs, z: *const c_char, p: *m
         // the WAL of a database opened with the engine lives in memory only
         if flags & ffi::SQLITE_OPEN_WAL != 0 && !z.is_null() {
             let name = CStr::from_ptr(z).to_string_lossy();
-            if let Some(base) = name.strip_suffix("-wal") {
-                if db::lookup(base).is_some() {
+            if let Some(base) = name.strip_suffix("-wal")
+                && db::lookup(base).is_some() {
                     let l = TLS_LANE.with(|c| c.get());
                     if l.is_null() {
                         return RC_CANTOPEN;
@@ -152,7 +152,6 @@ unsafe extern "C" fn vfs_open(_v: *mut ffi::sqlite3_vfs, z: *const c_char, p: *m
                     }
                     return RC_OK;
                 }
-            }
         }
         let mode = mode_for(z, flags);
         if mode < 0 {
@@ -259,11 +258,10 @@ unsafe extern "C" fn vfs_delete(_v: *mut ffi::sqlite3_vfs, z: *const c_char, syn
     unsafe {
         if !z.is_null() {
             let name = CStr::from_ptr(z).to_string_lossy();
-            if let Some(base) = name.strip_suffix("-wal") {
-                if db::lookup(base).is_some() {
+            if let Some(base) = name.strip_suffix("-wal")
+                && db::lookup(base).is_some() {
                     return RC_OK;
                 }
-            }
         }
         let r = ROOT.load(Acquire);
         ((*r).xDelete.unwrap())(r, z, sync_dir)

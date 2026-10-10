@@ -50,7 +50,7 @@ unsafe extern "C" fn connection_init(db: *mut ffi::sqlite3, _err: *mut *mut c_ch
         let mut ctx = std::ptr::null_mut();
         let fname = ffi::sqlite3_db_filename(db, c"main".as_ptr());
         if !fname.is_null() && crate::vfs::uri_bool(fname, "mw_rebase", false) && !crate::vfs::uri_bool(fname, "mw_norebase", false) {
-            ctx = 1 as *mut c_void;
+            ctx = std::ptr::dangling_mut::<c_void>();
         }
         ffi::sqlite3_trace_v2(db, TRACE_STMT | TRACE_PROFILE, Some(trace_cb), ctx);
     }

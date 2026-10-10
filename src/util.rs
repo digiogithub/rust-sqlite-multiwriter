@@ -5,7 +5,6 @@ use std::hash::{BuildHasherDefault, Hasher};
 pub const RC_OK: i32 = 0;
 pub const RC_ERROR: i32 = 1;
 pub const RC_BUSY: i32 = 5;
-pub const RC_NOMEM: i32 = 7;
 pub const RC_IOERR: i32 = 10;
 pub const RC_CORRUPT: i32 = 11;
 pub const RC_NOTFOUND: i32 = 12;

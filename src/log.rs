@@ -129,15 +129,12 @@ fn list_segments(base: &str) -> Vec<u32> {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            if let Some(suf) = n.strip_prefix(&name).and_then(|s| s.strip_prefix('.')) {
-                if suf.len() == 6 && suf.bytes().all(|b| b.is_ascii_digit()) {
-                    if let Ok(v) = suf.parse::<u32>() {
-                        if v > 0 {
+            if let Some(suf) = n.strip_prefix(&name).and_then(|s| s.strip_prefix('.'))
+                && suf.len() == 6 && suf.bytes().all(|b| b.is_ascii_digit())
+                    && let Ok(v) = suf.parse::<u32>()
+                        && v > 0 {
                             ids.push(v);
                         }
-                    }
-                }
-            }
         }
     }
     ids.sort_unstable();
@@ -177,7 +174,7 @@ impl Log {
     /// log and the epoch of the last recovered commit (the base when there is none).
     pub fn open(db_path: &str, pgsz: usize, st: &Store) -> Result<(Log, u64), i32> {
         let path = format!("{db_path}-mw");
-        let meta = OpenOptions::new().read(true).write(true).create(true).open(&path).map_err(|_| RC_CANTOPEN)?;
+        let meta = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|_| RC_CANTOPEN)?;
         if meta.try_lock().is_err() {
             return Err(RC_BUSY); // another process owns this database
         }
@@ -186,7 +183,7 @@ impl Log {
         let mut hdr = [0u8; META_SIZE];
         let mut valid = false;
         if size >= META_SIZE as u64 && fsio::pread(&meta, &mut hdr, 0).map_err(|_| RC_IOERR)? == META_SIZE {
-            if &hdr[..5] == &META_MAGIC[..5] && &hdr[..8] != META_MAGIC {
+            if hdr[..5] == META_MAGIC[..5] && &hdr[..8] != META_MAGIC {
                 return Err(RC_CANTOPEN); // another format: never read, never dropped
             }
             if &hdr[..8] == META_MAGIC && le32(&hdr[8..]) != FORMAT {

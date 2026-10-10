@@ -367,11 +367,10 @@ impl Lane {
     }
 
     pub fn dbsize_at(&mut self, snap: u64) -> u32 {
-        if let Some((e, v)) = self.dsz {
-            if e == snap {
+        if let Some((e, v)) = self.dsz
+            && e == snap {
                 return v;
             }
-        }
         let v = self.db.engine().store.dbsize(snap);
         self.dsz = Some((snap, v));
         v

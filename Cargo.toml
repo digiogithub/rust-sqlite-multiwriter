@@ -1,0 +1,18 @@
+[package]
+name = "sqlite_multiwriter"
+version = "0.1.0"
+edition = "2024"
+description = "Many concurrent writers on one SQLite database: a Rust port of the sqlite-multiwriter engine (a VFS)"
+license = "Apache-2.0"
+repository = "https://github.com/digiogithub/rust-sqlite-multiwriter"
+
+[dependencies]
+libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
+
+[features]
+default = ["rusqlite"]
+rusqlite = ["dep:rusqlite"]
+
+[dev-dependencies]
+rand = "0.8"

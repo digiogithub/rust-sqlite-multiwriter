@@ -125,7 +125,8 @@ pub struct Stats {
 
 fn db_for(path: &str) -> Option<std::sync::Arc<db::MwDb>> {
     let abs = std::path::absolute(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string());
-    db::lookup(&abs)
+    // SQLite names the database by its full path with the symbolic links resolved
+    db::lookup(&abs).or_else(|| std::fs::canonicalize(&abs).ok().and_then(|p| db::lookup(&p.to_string_lossy())))
 }
 
 /// Statistics of a database open with the engine in this process.

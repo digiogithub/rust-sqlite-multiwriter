@@ -434,7 +434,7 @@ impl MwDb {
         // the log only shrinks through compaction: ask the compactor, and throttle if it cannot keep up
         let lim = self.log_max_bytes.load(Relaxed);
         if lim > 0 {
-            let b = e.log.bytes();
+            let b = e.log.pending();
             if b > lim {
                 self.kick_compactor();
                 if b > lim * 16 {
@@ -558,6 +558,8 @@ impl MwDb {
         let st = &e.store;
         let _cg = lock(&self.compact_mu);
         let t = self.oldest_active();
+        // every record <= t was placed before t became visible: what is placed now covers them
+        let mark = e.log.appended();
         let base = e.log.base_epoch();
         if t <= base {
             return Ok(out);
@@ -619,6 +621,7 @@ impl MwDb {
         if werr {
             return Err(RC_IOERR);
         }
+        e.log.mark_compacted(mark);
         {
             let mut seq = lock(&st.seq);
             seq.compacted_epoch = t;
@@ -658,7 +661,7 @@ impl MwDb {
                 }
                 let Some(db) = weak.upgrade() else { return };
                 if let Some(e) = db.engine_opt()
-                    && e.log.bytes() > db.log_max_bytes.load(Relaxed) {
+                    && e.log.pending() > db.log_max_bytes.load(Relaxed) {
                         let _ = db.compact();
                     }
             })

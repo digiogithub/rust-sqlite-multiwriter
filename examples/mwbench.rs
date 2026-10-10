@@ -18,7 +18,7 @@ fn conn(variant: &str, path: &str) -> Connection {
         "sqlite" => {
             let c = Connection::open_with_flags(path, OpenFlags::default()).unwrap();
             c.busy_timeout(Duration::from_secs(10)).unwrap();
-            c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;").unwrap();
+            c.execute_batch(&format!("PRAGMA journal_mode=WAL; PRAGMA synchronous={};", sync_mode())).unwrap();
             c
         }
         v => {
@@ -31,7 +31,7 @@ fn conn(variant: &str, path: &str) -> Connection {
                 .collect();
             let o = Options { rebase: v == "mwr", durable_visibility: durable, params, ..Default::default() };
             let c = open(path, &o).unwrap();
-            c.execute_batch("PRAGMA synchronous=FULL;").unwrap();
+            c.execute_batch(&format!("PRAGMA synchronous={};", sync_mode())).unwrap();
             c
         }
     }
@@ -120,9 +120,15 @@ fn main() {
     std::fs::create_dir_all(&dir).unwrap();
     println!("{:<8} {:<7} {:>7} {:>10} {:>12} {:>9} {:>9} {:>9}", "variant", "workload", "writers", "tx/s", "retries/100", "p50 ms", "p99 ms", "p99.9 ms");
     for &w in &writers {
-        for v in ["sqlite", "mw", "mwr"] {
+        let variants = std::env::var("MW_VARIANTS").unwrap_or_else(|_| "sqlite,mw,mwr".to_string());
+        for v in variants.split(',') {
             run(v, &workload, w, secs, &dir);
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// MW_SYNCHRONOUS overrides synchronous=FULL (for both variants).
+fn sync_mode() -> String {
+    std::env::var("MW_SYNCHRONOUS").unwrap_or_else(|_| "FULL".to_string())
 }

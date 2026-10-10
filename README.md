@@ -70,19 +70,19 @@ engine with rebase. `MW_DURABLE_VISIBLE=1` and `MW_PARAMS="k=v&..."` pass option
 
 | workload | writers | SQLite tx/s | mw tx/s | mwr tx/s | SQLite p99.9 | mw p99.9 | mwr p99.9 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| bulk (100 inserts/tx, own table) | 1 | **3,302** | 2,781 | 2,538 | 6 ms | 5 ms | 5 ms |
-| | 4 | 3,143 | **3,894** | 3,344 | 35 ms | 15 ms | 20 ms |
-| | 16 | 3,144 | **4,818** | 4,587 | 1,934 ms | 45 ms | 51 ms |
-| groups (each its own row, same page) | 1 | **6,237** | 4,234 | 4,575 | 1.4 ms | 3.8 ms | 3.7 ms |
-| | 4 | 5,231 | **8,221** (91 retries/100) | 6,851 (0 retries) | 2.3 ms | 4.8 ms | 5.5 ms |
-| | 16 | 5,348 | **13,330** (181 retries/100) | 13,038 (0 retries) | 730 ms | 41 ms | 12.6 ms |
-| hot (4 shared rows: real conflict) | 1 | **6,255** | 5,035 | 4,964 | 1.4 ms | 3.1 ms | 3.3 ms |
-| | 4 | 5,518 | **6,803** | 6,479 | 1.8 ms | 5.9 ms | 7.4 ms |
-| | 16 | 5,382 | **14,812** | 11,914 | 34 ms | 37 ms | 11.7 ms |
+| bulk (100 inserts/tx, own table) | 1 | **2,748** | 2,643 | 2,348 | 7 ms | 6 ms | 9 ms |
+| | 4 | 3,218 | 3,545 | **3,625** | 22 ms | 21 ms | 18 ms |
+| | 16 | 2,748 | **4,452** | 4,059 | 1,786 ms | 50 ms | 44 ms |
+| groups (each its own row, same page) | 1 | **5,680** | 5,232 | 5,589 | 1.4 ms | 3.1 ms | 2.8 ms |
+| | 4 | 4,247 | **7,799** (90 retries/100) | 6,553 (0 retries) | 2.8 ms | 5.4 ms | 5.9 ms |
+| | 16 | 5,172 | **14,030** (177 retries/100) | 12,889 (0 retries) | 104 ms | 31 ms | 8.5 ms |
+| hot (4 shared rows: real conflict) | 1 | **5,892** | 4,525 | 5,075 | 1.5 ms | 3.7 ms | 3.1 ms |
+| | 4 | 5,459 | **8,402** | 8,002 | 2.3 ms | 5.6 ms | 5.1 ms |
+| | 16 | 5,429 | **15,125** | 12,266 | 631 ms | 7.4 ms | 12 ms |
 
 With `durable_visibility` (strict order) the contended workloads stay at about 3,000–3,700 tx/s with 16 writers
-(`groups`/`hot`, 210 retries per 100 transactions). A single writer runs 15–35 % below stock SQLite (the
-engine's record and fsync per commit).
+(`groups`/`hot`, 210 retries per 100 transactions). A single writer runs 4–20 % below stock SQLite (the engine's
+own record and fsync per commit).
 
 ## Options (URI)
 

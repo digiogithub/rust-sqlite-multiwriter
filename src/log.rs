@@ -100,6 +100,10 @@ pub struct Log {
     base: AtomicU64,
     cur: Mutex<Cursor>,
     total: AtomicI64,
+    /// Bytes of records ever placed (monotonic) and the value of it that the last compaction covered: the
+    /// difference is what waits for a compaction (the size of the files is not: a segment is only deleted whole).
+    appended: AtomicI64,
+    compacted_mark: AtomicI64,
     sync: Mutex<SyncState>,
     sync_cv: Condvar,
     pub n_syncs: AtomicI64,
@@ -201,6 +205,8 @@ impl Log {
             base: AtomicU64::new(1),
             cur: Mutex::new(Cursor { segs: Vec::new(), max_epoch: Vec::new(), end: Vec::new(), roll: false }),
             total: AtomicI64::new(0),
+            appended: AtomicI64::new(0),
+            compacted_mark: AtomicI64::new(0),
             sync: Mutex::new(SyncState::default()),
             sync_cv: Condvar::new(),
             n_syncs: AtomicI64::new(0),
@@ -323,6 +329,7 @@ impl Log {
             cur.max_epoch.push(max_epoch);
             cur.end.push(off);
             self.total.fetch_add(off as i64, Relaxed);
+            self.appended.fetch_add(off as i64, Relaxed); // (a recovered log waits for a compaction)
         }
         Ok(last)
     }
@@ -392,6 +399,7 @@ impl Log {
         }
         cur.max_epoch[k] = cur.max_epoch[k].max(epoch);
         self.total.fetch_add(size as i64, Relaxed);
+        self.appended.fetch_add(size as i64, Relaxed);
         Ok(Place { seg, off })
     }
 
@@ -405,6 +413,7 @@ impl Log {
         }
         cur.end[k] = p.off;
         self.total.fetch_sub(size as i64, Relaxed);
+        self.appended.fetch_sub(size as i64, Relaxed);
         true
     }
 
@@ -474,6 +483,18 @@ impl Log {
     }
     pub fn bytes(&self) -> i64 {
         self.total.load(Relaxed)
+    }
+
+    /// The bytes placed since what the last compaction covered.
+    pub fn pending(&self) -> i64 {
+        self.appended.load(Relaxed) - self.compacted_mark.load(Relaxed)
+    }
+    pub fn appended(&self) -> i64 {
+        self.appended.load(Relaxed)
+    }
+    /// A compaction covered everything placed up to mark.
+    pub fn mark_compacted(&self, mark: i64) {
+        self.compacted_mark.fetch_max(mark, Relaxed);
     }
 
     /// Durably records that the state up to base is in the database file.
